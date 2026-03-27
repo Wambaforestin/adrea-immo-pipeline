@@ -371,7 +371,7 @@ def nettoyer_code_postal(valeur: str) -> str:
 
     # Tronquer si trop long (plus de 5 chiffres)
     if len(chiffres) > 5:
-        chiffres = chiffres[:5]
+        chiffres = chiffres[:5] # garder les 5 premiers chiffres. (ex: "750014" -> "75001", pas "00075")
 
     # Compléter à gauche avec des zéros si trop court
     chiffres = chiffres.zfill(5)
@@ -421,45 +421,84 @@ def valider_cp_strict(valeur: str) -> bool:
 _cog_cache: pd.DataFrame | None = None
 
 
+def _trouver_fichier_cog() -> Path | None:
+    """
+    Cherche le fichier COG INSEE dans referentiels/.
+    Accepte n'importe quel nom contenant "communes" (communes2024.csv,
+    communes2026.csv, communes.csv...).
+    """
+    for candidat in sorted(REFERENTIELS_DIR.glob("communes*.csv"), reverse=True):
+        return candidat
+    return None
+
+
+def _trouver_fichier_hexasmal() -> Path | None:
+    """
+    Cherche le fichier Hexasmal dans referentiels/.
+    Accepte : hexasmal.csv, 019HexaSmal.csv, HexaSmal.csv...
+    Exclut le fichier enrichi (trop volumineux, >50 Mo).
+    """
+    candidats = list(REFERENTIELS_DIR.glob("*[Hh]exa*[Ss]mal*.csv"))
+    candidats += list(REFERENTIELS_DIR.glob("hexasmal*.csv"))
+    for chemin in candidats:
+        # Ignorer le fichier enrichi (438 Mo) - on veut le fichier léger (1.6 Mo)
+        if chemin.stat().st_size < 10_000_000:
+            return chemin
+    return None
+
+
 def charger_cog_insee() -> pd.DataFrame:
     """
-    Charge le COG INSEE 2024 depuis referentiels/communes2024.csv.
-    Met en cache le DataFrame pour éviter les relectures répétées.
+    Charge le COG INSEE et Hexasmal depuis referentiels/.
 
-    Le fichier COG INSEE contient les colonnes :
-        COM (code commune 5 chiffres), LIBELLE (nom officiel), DEP, REG
+    Détection automatique du fichier COG (communes*.csv) et Hexasmal.
+    Fonctionne avec COG 2024, 2025, 2026 sans changement de code.
 
-    L'association CP <-> commune est faite via Hexasmal (La Poste)
-    qui contient la colonne Code_commune_INSEE pour la jointure.
+    COG INSEE - colonnes utilisées :
+        TYPECOM : filtre sur "COM" uniquement (exclut arrondissements, cantons)
+        COM     : code INSEE commune (5 chiffres)
+        LIBELLE : libellé officiel
+
+    Hexasmal La Poste (019HexaSmal.csv) - colonnes utilisées :
+        Code_commune_INSEE       : code INSEE pour la jointure avec COG
+        Code_postal              : code postal (5 chiffres)
+        Libellé_d_acheminement   : nom officiel d'acheminement La Poste
     """
     global _cog_cache
     if _cog_cache is not None:
         return _cog_cache
 
-    cog_path = REFERENTIELS_DIR / "communes2024.csv"
-    hexasmal_path = REFERENTIELS_DIR / "hexasmal.csv"
+    cog_path = _trouver_fichier_cog()
+    hexasmal_path = _trouver_fichier_hexasmal()
 
-    if not cog_path.exists():
+    if cog_path is None:
         print(
-            f"  ATTENTION : {cog_path} introuvable. "
-            "Téléchargez le COG INSEE 2024 sur https://www.insee.fr/fr/information/2560452"
+            "  ATTENTION : fichier COG INSEE introuvable dans referentiels/. "
+            "Téléchargez communes*.csv sur https://www.insee.fr/fr/information/2560452"
         )
         return pd.DataFrame()
+
+    print(f"  Chargement COG : {cog_path.name}")
 
     # Lecture du COG INSEE
     cog = pd.read_csv(cog_path, dtype=str, low_memory=False)
 
-    # Colonnes attendues du COG INSEE 2024
+    # Filtrer sur TYPECOM = "COM" pour ne garder que les communes réelles
+    # (exclut les arrondissements municipaux, les communes déléguées, etc.)
+    if "TYPECOM" in cog.columns:
+        cog = cog[cog["TYPECOM"] == "COM"].copy()
+
+    # Détecter les colonnes code_insee et libelle
     col_mapping = {}
     for col in cog.columns:
-        col_upper = col.upper()
+        col_upper = col.upper().strip()
         if col_upper in ("COM", "CODECOM", "CODE_COM"):
             col_mapping["code_insee"] = col
         elif col_upper in ("LIBELLE", "NOM", "NCCENR", "LIBELLE_COM"):
             col_mapping["libelle"] = col
 
     if "code_insee" not in col_mapping or "libelle" not in col_mapping:
-        print(f"  ATTENTION : colonnes COG non reconnues. Colonnes trouvées : {list(cog.columns)}")
+        print(f"  ATTENTION : colonnes COG non reconnues. Colonnes : {list(cog.columns)}")
         return pd.DataFrame()
 
     cog = cog.rename(columns={
@@ -467,14 +506,56 @@ def charger_cog_insee() -> pd.DataFrame:
         col_mapping["libelle"]: "libelle_commune",
     })[["code_insee", "libelle_commune"]]
 
+    cog["code_insee"] = cog["code_insee"].str.strip().str.zfill(5)
+    print(f"  COG chargé : {len(cog):,} communes (TYPECOM=COM)")
+
     # Jointure avec Hexasmal pour avoir le lien CP <-> code INSEE
-    if hexasmal_path.exists():
-        hexa = pd.read_csv(hexasmal_path, dtype=str, sep=";", low_memory=False)
-        # Hexasmal : colonnes Code_commune_INSEE, Code_postal, Nom_commune
-        hexa_cols = {c.upper(): c for c in hexa.columns}
-        cp_col = hexa_cols.get("CODE_POSTAL", hexa_cols.get("CP"))
-        insee_col = hexa_cols.get("CODE_COMMUNE_INSEE", hexa_cols.get("CODEINSEE"))
-        nom_col = hexa_cols.get("NOM_COMMUNE", hexa_cols.get("LIBELLE"))
+    if hexasmal_path is not None:
+        print(f"  Chargement Hexasmal : {hexasmal_path.name}")
+
+        # Le fichier 019HexaSmal.csv est encodé en ISO-8859-1 (latin-1).
+        # La première ligne commence par "#" : pandas l'inclut dans le nom
+        # de la première colonne -> on nettoie le "#" après lecture.
+        hexa = pd.read_csv(
+            hexasmal_path,
+            dtype=str,
+            sep=";",
+            encoding="iso-8859-1",
+            low_memory=False,
+        )
+
+        # Nettoyer le "#" éventuel en tête du nom de la première colonne
+        hexa.columns = [c.lstrip("#").strip() for c in hexa.columns]
+
+        # Colonnes réelles du fichier 019HexaSmal.csv :
+        #   Code_commune_INSEE, Nom_de_la_commune, Code_postal,
+        #   Libellé_d_acheminement, Ligne_5
+        # On normalise pour la détection (accents, casse, underscores)
+        import unicodedata as _ud
+        def _norm_col(c):
+            c = _ud.normalize("NFD", c)
+            c = "".join(x for x in c if _ud.category(x) != "Mn")
+            return c.upper().replace("_", "").replace(" ", "").strip()
+
+        hexa_cols = {_norm_col(c): c for c in hexa.columns}
+
+        cp_col    = hexa_cols.get("CODEPOSTAL")
+        insee_col = hexa_cols.get("CODECOMMUNEINSEE")
+        # Libellé_d_acheminement = nom officiel La Poste, fallback Nom_de_la_commune
+        # Libellé_d_acheminement -> normalisé en "LIBELLEDACHEMINEMENT"
+        # Nom_de_la_commune      -> normalisé en "NOMDELACOMMUNE"
+        libelle_col = (
+            hexa_cols.get("LIBELLEDACHEMINEMENT")
+            or hexa_cols.get("NOMDELACOMMUNE")
+            or hexa_cols.get("NOMCOMMUNE")
+        )
+
+        if not cp_col or not insee_col:
+            print(
+                f"  ATTENTION : colonnes Hexasmal non reconnues après nettoyage.\n"
+                f"  Colonnes brutes : {list(hexa.columns)}\n"
+                f"  Clés normalisées : {list(hexa_cols.keys())}"
+            )
 
         if cp_col and insee_col:
             hexa = hexa.rename(columns={
@@ -482,9 +563,9 @@ def charger_cog_insee() -> pd.DataFrame:
                 insee_col: "code_insee_hexa",
             })
             hexa["code_postal"] = hexa["code_postal"].str.strip().str.zfill(5)
-            hexa["code_insee_hexa"] = hexa["code_insee_hexa"].str.strip()
+            hexa["code_insee_hexa"] = hexa["code_insee_hexa"].str.strip().str.zfill(5)
 
-            # Joindre COG sur Hexasmal via code_insee
+            # Joindre COG sur Hexasmal via code_insee pour récupérer LIBELLE officiel
             cog_enrichi = hexa.merge(
                 cog,
                 left_on="code_insee_hexa",
@@ -493,13 +574,28 @@ def charger_cog_insee() -> pd.DataFrame:
             )[["code_postal", "code_insee_hexa", "libelle_commune"]].rename(
                 columns={"code_insee_hexa": "code_insee"}
             )
+
+            # Fallback : si la jointure COG échoue, utiliser le libellé Hexasmal
+            if libelle_col:
+                hexa_libelle = hexa[["code_postal", libelle_col]].rename(
+                    columns={libelle_col: "libelle_hexa"}
+                )
+                cog_enrichi = cog_enrichi.merge(hexa_libelle, on="code_postal", how="left")
+                cog_enrichi["libelle_commune"] = cog_enrichi["libelle_commune"].fillna(
+                    cog_enrichi["libelle_hexa"]
+                )
+                cog_enrichi = cog_enrichi.drop(columns=["libelle_hexa"], errors="ignore")
+
             _cog_cache = cog_enrichi.drop_duplicates(subset=["code_postal", "code_insee"])
-            print(f"  COG INSEE + Hexasmal chargés : {len(_cog_cache):,} associations CP/commune")
+            print(f"  COG + Hexasmal : {len(_cog_cache):,} associations CP/commune prêtes")
             return _cog_cache
 
-    # Sans Hexasmal : on retourne le COG seul (jointure par code INSEE direct)
+        print("  ATTENTION : colonnes CP ou INSEE non trouvées dans Hexasmal.")
+        print(f"  Colonnes disponibles : {list(hexa.columns)}")
+
+    # Sans Hexasmal : COG seul, jointure uniquement par code INSEE direct
     _cog_cache = cog
-    print(f"  COG INSEE chargé (sans Hexasmal) : {len(_cog_cache):,} communes")
+    print(f"  COG seul (sans Hexasmal) : {len(_cog_cache):,} communes")
     return _cog_cache
 
 

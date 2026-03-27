@@ -3,14 +3,6 @@
 Pipeline ETL/ELT de normalisation des adresses postales.
 Projet ADREA - ImmoPro France SAS.
 
-## Stack
-
-- Python 3.11+
-- pandas, duckdb, rapidfuzz, httpx, great-expectations
-- uv (gestionnaire de paquets)
-- Git Bash (CLI)
-- DuckDB (base cible)
-
 ## Structure
 
 ```

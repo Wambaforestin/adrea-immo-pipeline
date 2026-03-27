@@ -58,8 +58,6 @@ uv sync
 # 5. Copier les CSV sources dans le dossier sources/
 # (ne jamais modifier les fichiers sources)
 
-# 6. Lancer le profiling initial
-python etl/profiling.py
 ```
 
 ## Référentiels officiels à télécharger manuellement

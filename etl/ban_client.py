@@ -137,7 +137,7 @@ def geocoder_unitaire(adresse: str, code_postal: str = "") -> dict:
             break
 
         if tentative < MAX_RETRIES:
-            time.sleep(BACKOFF_BASE ** tentative)
+            time.sleep(BACKOFF_BASE**tentative)
 
     return _resultat_vide()
 
@@ -245,16 +245,16 @@ def geocoder_batch(df: pd.DataFrame, col_id: str = "addr_id") -> pd.DataFrame:
 
     # Identifier les lignes non encore dans le cache
     ids_a_traiter = [
-        str(row[col_id])
-        for _, row in df.iterrows()
-        if str(row[col_id]) not in cache
+        str(row[col_id]) for _, row in df.iterrows() if str(row[col_id]) not in cache
     ]
 
     nb_total = len(df)
     nb_cache = nb_total - len(ids_a_traiter)
     nb_a_traiter = len(ids_a_traiter)
 
-    print(f"  T08 BAN : {nb_total:,} adresses | {nb_cache:,} en cache | {nb_a_traiter:,} à appeler")
+    print(
+        f"  T08 BAN : {nb_total:,} adresses | {nb_cache:,} en cache | {nb_a_traiter:,} à appeler"
+    )
 
     if nb_a_traiter > 0:
         df_a_traiter = df[df[col_id].astype(str).isin(ids_a_traiter)].copy()
@@ -268,7 +268,7 @@ def geocoder_batch(df: pd.DataFrame, col_id: str = "addr_id") -> pd.DataFrame:
             fin = min(debut + BATCH_SIZE, nb_a_traiter)
             df_batch = df_a_traiter.iloc[debut:fin]
 
-            print(f"  Batch {i+1}/{nb_batches} : lignes {debut+1} à {fin}...")
+            print(f"  Batch {i + 1}/{nb_batches} : lignes {debut + 1} à {fin}...")
 
             resultats_batch = _appeler_api_batch(df_batch)
             cache.update(resultats_batch)
@@ -291,15 +291,16 @@ def _appeler_api_batch(df_batch: pd.DataFrame) -> dict:
     Applique un retry exponentiel en cas d'échec réseau.
     """
     contenu_csv = _construire_csv_batch(df_batch)
+    # L'API BAN /search/csv/ attend un multipart/form-data avec le CSV
+    # dans un champ nommé "data". Envoyer le CSV en body brut provoque HTTP 400.
+    fichier_multipart = {
+        "data": ("adresses.csv", contenu_csv.encode("utf-8"), "text/csv")
+    }
 
     for tentative in range(1, MAX_RETRIES + 1):
         try:
             with httpx.Client(timeout=TIMEOUT_SECONDES) as client:
-                reponse = client.post(
-                    BAN_URL_BATCH,
-                    content=contenu_csv.encode("utf-8"),
-                    headers={"Content-Type": "text/csv; charset=utf-8"},
-                )
+                reponse = client.post(BAN_URL_BATCH, files=fichier_multipart)
                 reponse.raise_for_status()
 
             return _parser_reponse_batch(reponse.text)
@@ -307,21 +308,20 @@ def _appeler_api_batch(df_batch: pd.DataFrame) -> dict:
         except httpx.TimeoutException:
             print(f"    Timeout (tentative {tentative}/{MAX_RETRIES})")
         except httpx.HTTPStatusError as e:
-            print(f"    Erreur HTTP {e.response.status_code} (tentative {tentative}/{MAX_RETRIES})")
+            print(
+                f"    Erreur HTTP {e.response.status_code} (tentative {tentative}/{MAX_RETRIES})"
+            )
         except Exception as e:
             print(f"    Erreur inattendue : {e} (tentative {tentative}/{MAX_RETRIES})")
 
         if tentative < MAX_RETRIES:
-            delai = BACKOFF_BASE ** tentative
+            delai = BACKOFF_BASE**tentative
             print(f"    Attente {delai:.0f}s avant retry...")
             time.sleep(delai)
 
     # Échec total : retourner des résultats vides pour toutes les lignes du batch
     print(f"    Batch échoué après {MAX_RETRIES} tentatives -> résultats vides")
-    return {
-        str(row["addr_id"]): _resultat_vide()
-        for _, row in df_batch.iterrows()
-    }
+    return {str(row["addr_id"]): _resultat_vide() for _, row in df_batch.iterrows()}
 
 
 def _enrichir_dataframe(df: pd.DataFrame, cache: dict, col_id: str) -> pd.DataFrame:
@@ -401,9 +401,15 @@ def _afficher_distribution_scores(df: pd.DataFrame):
     nb_rejet = int((df["qualite"] == "D").sum())
 
     print("\n  Distribution des scores BAN :")
-    print(f"    PASS        (score >= {SEUIL_PASS})  : {nb_pass:>8,}  ({nb_pass/nb_total*100:.1f}%)")
-    print(f"    QUARANTAINE (score >= {SEUIL_QUARANTAINE})  : {nb_quarantaine:>8,}  ({nb_quarantaine/nb_total*100:.1f}%)")
-    print(f"    REJET       (score <  {SEUIL_QUARANTAINE})  : {nb_rejet:>8,}  ({nb_rejet/nb_total*100:.1f}%)")
+    print(
+        f"    PASS        (score >= {SEUIL_PASS})  : {nb_pass:>8,}  ({nb_pass / nb_total * 100:.1f}%)"
+    )
+    print(
+        f"    QUARANTAINE (score >= {SEUIL_QUARANTAINE})  : {nb_quarantaine:>8,}  ({nb_quarantaine / nb_total * 100:.1f}%)"
+    )
+    print(
+        f"    REJET       (score <  {SEUIL_QUARANTAINE})  : {nb_rejet:>8,}  ({nb_rejet / nb_total * 100:.1f}%)"
+    )
 
 
 def separer_flux(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -416,13 +422,17 @@ def separer_flux(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
         df_rejet       : score < SEUIL_QUARANTAINE ou CP invalide -> rejected.csv
     """
     if "qualite" not in df.columns:
-        raise ValueError("La colonne 'qualite' est absente. Appelez geocoder_batch() d'abord.")
+        raise ValueError(
+            "La colonne 'qualite' est absente. Appelez geocoder_batch() d'abord."
+        )
 
     # Les lignes avec CP invalide (cp_invalide=True) vont directement en rejet
     # indépendamment du score BAN
     if "cp_invalide" in df.columns:
         df.loc[df["cp_invalide"], "qualite"] = "D"
-        df.loc[df["cp_invalide"], "motif_rejet"] = df.loc[df["cp_invalide"], "motif_rejet"].where(
+        df.loc[df["cp_invalide"], "motif_rejet"] = df.loc[
+            df["cp_invalide"], "motif_rejet"
+        ].where(
             df.loc[df["cp_invalide"], "motif_rejet"].ne(""),
             "code_postal_invalide",
         )

@@ -27,9 +27,22 @@ REFERENTIELS_DIR = Path("referentiels")
 
 # Mots qui restent en minuscule dans un libellé de voie (articles, prépositions)
 MOTS_MINUSCULES = {
-    "de", "du", "des", "le", "la", "les",
-    "sur", "sous", "en", "par", "au", "aux",
-    "et", "à", "l", "d",
+    "de",
+    "du",
+    "des",
+    "le",
+    "la",
+    "les",
+    "sur",
+    "sous",
+    "en",
+    "par",
+    "au",
+    "aux",
+    "et",
+    "à",
+    "l",
+    "d",
 }
 
 
@@ -75,10 +88,32 @@ def normaliser_casse(texte: str) -> str:
 
 # Dictionnaire des types de voie connus pour le parsing
 TYPES_VOIE_CONNUS = [
-    "impasse", "allée", "allee", "avenue", "boulevard", "chemin", "route",
-    "rue", "square", "résidence", "residence", "hameau", "lotissement",
-    "passage", "place", "quai", "villa", "voie", "domaine", "sentier",
-    "cité", "cite", "ruelle", "esplanade", "promenade", "parvis",
+    "impasse",
+    "allée",
+    "allee",
+    "avenue",
+    "boulevard",
+    "chemin",
+    "route",
+    "rue",
+    "square",
+    "résidence",
+    "residence",
+    "hameau",
+    "lotissement",
+    "passage",
+    "place",
+    "quai",
+    "villa",
+    "voie",
+    "domaine",
+    "sentier",
+    "cité",
+    "cite",
+    "ruelle",
+    "esplanade",
+    "promenade",
+    "parvis",
 ]
 
 # Regex du code postal français (5 chiffres consécutifs)
@@ -139,12 +174,14 @@ def parser_adresse_brute(texte: str) -> dict:
     pos_cp = match_cp.start()
 
     # Étape 2 : tout ce qui est après le CP est potentiellement la commune
-    partie_apres_cp = texte[match_cp.end():].strip().lstrip(",").strip()
+    partie_apres_cp = texte[match_cp.end() :].strip().lstrip(",").strip()
     partie_avant_cp = texte[:pos_cp].strip().rstrip(",").strip()
 
     # Heuristique commune : si la partie après CP ressemble à un nom de ville
     # (pas de chiffres sauf arrondissement), c'est la commune
-    if partie_apres_cp and not re.match(r"^\d+\s*(?:bis|ter)?", partie_apres_cp, re.IGNORECASE):
+    if partie_apres_cp and not re.match(
+        r"^\d+\s*(?:bis|ter)?", partie_apres_cp, re.IGNORECASE
+    ):
         resultat["commune"] = partie_apres_cp
         partie_adresse = partie_avant_cp
     else:
@@ -199,7 +236,7 @@ def _extraire_num_et_voie(texte: str, resultat: dict):
     match_num = REGEX_NUM_VOIE.match(texte)
     if match_num:
         resultat["num_voie"] = match_num.group(1).strip()
-        reste = texte[match_num.end():].strip()
+        reste = texte[match_num.end() :].strip()
     else:
         reste = texte
 
@@ -208,7 +245,7 @@ def _extraire_num_et_voie(texte: str, resultat: dict):
     for type_voie in TYPES_VOIE_CONNUS:
         if reste_lower.startswith(type_voie):
             resultat["type_voie"] = type_voie.capitalize()
-            resultat["nom_voie"] = reste[len(type_voie):].strip()
+            resultat["nom_voie"] = reste[len(type_voie) :].strip()
             return
 
     # Si pas de numéro au début, chercher le type de voie n'importe où
@@ -222,7 +259,7 @@ def _extraire_num_et_voie(texte: str, resultat: dict):
                 if match_num2:
                     resultat["num_voie"] = match_num2.group(1).strip()
             resultat["type_voie"] = type_voie.capitalize()
-            resultat["nom_voie"] = reste[idx + len(type_voie):].strip()
+            resultat["nom_voie"] = reste[idx + len(type_voie) :].strip()
             return
 
     # Dernier recours : tout le reste est le nom de voie
@@ -240,18 +277,27 @@ def appliquer_parsing_flux(df: pd.DataFrame) -> pd.DataFrame:
     """
     parsed = df["adresse_brute"].apply(parser_adresse_brute).apply(pd.Series)
     parsed.columns = [
-        "num_voie_p", "type_voie_p", "nom_voie_p",
-        "code_postal_p", "commune_p",
+        "num_voie_p",
+        "type_voie_p",
+        "nom_voie_p",
+        "code_postal_p",
+        "commune_p",
     ]
     df = pd.concat([df, parsed], axis=1)
 
-    # Taux de parsing réussi : CP extrait ET type_voie non vide
+    # Taux de parsing réussi : CP extrait (critère principal, le plus stable).
+    # Le type_voie peut être absent pour des adresses atypiques (ZAC, lieu-dit)
+    # sans que le parsing soit considéré en échec.
     nb_total = len(df)
-    nb_reussi = int(
-        (df["code_postal_p"].ne("") & df["type_voie_p"].ne("")).sum()
+    nb_cp_ok = int(df["code_postal_p"].ne("").sum())
+    nb_voie_ok = int((df["code_postal_p"].ne("") & df["type_voie_p"].ne("")).sum())
+    taux_cp = round(nb_cp_ok / nb_total * 100, 2) if nb_total > 0 else 0.0
+    taux_complet = round(nb_voie_ok / nb_total * 100, 2) if nb_total > 0 else 0.0
+    print(
+        f"  T02 parsing adresse_brute : "
+        f"CP extrait={nb_cp_ok:,}/{nb_total:,} ({taux_cp}%) | "
+        f"CP+voie={nb_voie_ok:,}/{nb_total:,} ({taux_complet}%)"
     )
-    taux = round(nb_reussi / nb_total * 100, 2) if nb_total > 0 else 0.0
-    print(f"  T02 parsing adresse_brute : {nb_reussi:,}/{nb_total:,} = {taux}% (cible > 85%)")
 
     return df
 
@@ -324,13 +370,15 @@ def expand_abreviation_voie(type_voie: str) -> str:
     return ABBREV_VOIES.get(cle, normaliser_casse(type_voie))
 
 
-def appliquer_expansion_abreviations(df: pd.DataFrame, col_type_voie: str) -> pd.DataFrame:
+def appliquer_expansion_abreviations(
+    df: pd.DataFrame, col_type_voie: str
+) -> pd.DataFrame:
     """
     Applique T03 sur la colonne de type de voie d'un DataFrame.
     Crée la colonne type_voie_norm à partir de col_type_voie.
     """
-    df["type_voie_norm"] = df[col_type_voie].fillna("").astype(str).apply(
-        expand_abreviation_voie
+    df["type_voie_norm"] = (
+        df[col_type_voie].fillna("").astype(str).apply(expand_abreviation_voie)
     )
     return df
 
@@ -371,7 +419,7 @@ def nettoyer_code_postal(valeur: str) -> str:
 
     # Tronquer si trop long (plus de 5 chiffres)
     if len(chiffres) > 5:
-        chiffres = chiffres[:5] # garder les 5 premiers chiffres. (ex: "750014" -> "75001", pas "00075")
+        chiffres = chiffres[:5]
 
     # Compléter à gauche avec des zéros si trop court
     chiffres = chiffres.zfill(5)
@@ -498,13 +546,17 @@ def charger_cog_insee() -> pd.DataFrame:
             col_mapping["libelle"] = col
 
     if "code_insee" not in col_mapping or "libelle" not in col_mapping:
-        print(f"  ATTENTION : colonnes COG non reconnues. Colonnes : {list(cog.columns)}")
+        print(
+            f"  ATTENTION : colonnes COG non reconnues. Colonnes : {list(cog.columns)}"
+        )
         return pd.DataFrame()
 
-    cog = cog.rename(columns={
-        col_mapping["code_insee"]: "code_insee",
-        col_mapping["libelle"]: "libelle_commune",
-    })[["code_insee", "libelle_commune"]]
+    cog = cog.rename(
+        columns={
+            col_mapping["code_insee"]: "code_insee",
+            col_mapping["libelle"]: "libelle_commune",
+        }
+    )[["code_insee", "libelle_commune"]]
 
     cog["code_insee"] = cog["code_insee"].str.strip().str.zfill(5)
     print(f"  COG chargé : {len(cog):,} communes (TYPECOM=COM)")
@@ -532,6 +584,7 @@ def charger_cog_insee() -> pd.DataFrame:
         #   Libellé_d_acheminement, Ligne_5
         # On normalise pour la détection (accents, casse, underscores)
         import unicodedata as _ud
+
         def _norm_col(c):
             c = _ud.normalize("NFD", c)
             c = "".join(x for x in c if _ud.category(x) != "Mn")
@@ -539,7 +592,7 @@ def charger_cog_insee() -> pd.DataFrame:
 
         hexa_cols = {_norm_col(c): c for c in hexa.columns}
 
-        cp_col    = hexa_cols.get("CODEPOSTAL")
+        cp_col = hexa_cols.get("CODEPOSTAL")
         insee_col = hexa_cols.get("CODECOMMUNEINSEE")
         # Libellé_d_acheminement = nom officiel La Poste, fallback Nom_de_la_commune
         # Libellé_d_acheminement -> normalisé en "LIBELLEDACHEMINEMENT"
@@ -558,10 +611,12 @@ def charger_cog_insee() -> pd.DataFrame:
             )
 
         if cp_col and insee_col:
-            hexa = hexa.rename(columns={
-                cp_col: "code_postal",
-                insee_col: "code_insee_hexa",
-            })
+            hexa = hexa.rename(
+                columns={
+                    cp_col: "code_postal",
+                    insee_col: "code_insee_hexa",
+                }
+            )
             hexa["code_postal"] = hexa["code_postal"].str.strip().str.zfill(5)
             hexa["code_insee_hexa"] = hexa["code_insee_hexa"].str.strip().str.zfill(5)
 
@@ -580,14 +635,22 @@ def charger_cog_insee() -> pd.DataFrame:
                 hexa_libelle = hexa[["code_postal", libelle_col]].rename(
                     columns={libelle_col: "libelle_hexa"}
                 )
-                cog_enrichi = cog_enrichi.merge(hexa_libelle, on="code_postal", how="left")
+                cog_enrichi = cog_enrichi.merge(
+                    hexa_libelle, on="code_postal", how="left"
+                )
                 cog_enrichi["libelle_commune"] = cog_enrichi["libelle_commune"].fillna(
                     cog_enrichi["libelle_hexa"]
                 )
-                cog_enrichi = cog_enrichi.drop(columns=["libelle_hexa"], errors="ignore")
+                cog_enrichi = cog_enrichi.drop(
+                    columns=["libelle_hexa"], errors="ignore"
+                )
 
-            _cog_cache = cog_enrichi.drop_duplicates(subset=["code_postal", "code_insee"])
-            print(f"  COG + Hexasmal : {len(_cog_cache):,} associations CP/commune prêtes")
+            _cog_cache = cog_enrichi.drop_duplicates(
+                subset=["code_postal", "code_insee"]
+            )
+            print(
+                f"  COG + Hexasmal : {len(_cog_cache):,} associations CP/commune prêtes"
+            )
             return _cog_cache
 
         print("  ATTENTION : colonnes CP ou INSEE non trouvées dans Hexasmal.")
@@ -599,7 +662,9 @@ def charger_cog_insee() -> pd.DataFrame:
     return _cog_cache
 
 
-def normaliser_ville(ville_brute: str, cp_clean: str, cog: pd.DataFrame) -> tuple[str, str]:
+def normaliser_ville(
+    ville_brute: str, cp_clean: str, cog: pd.DataFrame
+) -> tuple[str, str]:
     """
     T05 - Normalise un nom de ville via le COG INSEE 2024.
 
@@ -621,7 +686,9 @@ def normaliser_ville(ville_brute: str, cp_clean: str, cog: pd.DataFrame) -> tupl
     commune_principale = None
     if cp_clean.startswith("75") and cp_clean[2:].isdigit():
         commune_principale = "Paris"
-    elif cp_clean.startswith("69") and cp_clean[2:].isdigit() and int(cp_clean) <= 69009:
+    elif (
+        cp_clean.startswith("69") and cp_clean[2:].isdigit() and int(cp_clean) <= 69009
+    ):
         commune_principale = "Lyon"
     elif cp_clean.startswith("130") and int(cp_clean) <= 13016:
         commune_principale = "Marseille"
@@ -696,7 +763,7 @@ def appliquer_normalisation_villes(
     nb_normalises = int(df["libelle_commune"].ne("").sum())
     print(
         f"  T05 villes normalisées : {nb_normalises:,}/{nb_total:,} "
-        f"({round(nb_normalises/nb_total*100, 2)}%)"
+        f"({round(nb_normalises / nb_total * 100, 2)}%)"
     )
     return df
 
@@ -844,6 +911,6 @@ def appliquer_detection_complement(
     nb_avec_complement = int(df[col_complement_cible].ne("").sum())
     print(
         f"  T07 compléments détectés : {nb_avec_complement:,}/{len(df):,} lignes "
-        f"({round(nb_avec_complement/len(df)*100, 2)}%)"
+        f"({round(nb_avec_complement / len(df) * 100, 2)}%)"
     )
     return df

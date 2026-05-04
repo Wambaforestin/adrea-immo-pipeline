@@ -17,6 +17,7 @@ Prérequis :
 import re
 from pathlib import Path
 
+import argparse
 import duckdb
 import pandas as pd
 
@@ -32,8 +33,25 @@ from transformations_v2 import (
     t14_score_completude,
 )
 
-DUCKDB_PATH = Path("output/adrea_etl.duckdb")
+DUCKDB_PATH_DEFAUT = Path("output/adrea_etl.duckdb")
 TABLE = "referentiel_adresses"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--db",
+        default=str(DUCKDB_PATH_DEFAUT),
+        help="Chemin vers la base DuckDB (défaut : output/adrea_etl.duckdb)",
+    )
+    parser.add_argument(
+        "--table",
+        default=TABLE,
+        help=f"Nom de la table cible (défaut : referentiel_adresses)",
+    )
+    return parser.parse_args()
+
+
 BASELINE_PATH = Path("output/baseline_avant.csv")
 
 
@@ -190,9 +208,9 @@ def afficher_tableau_comparatif(avant: dict, apres: dict, nb_total: int):
         f"  {'Score complétude moyen (T14)':<42} {'—':>9} {score_apres:>8.1f}  {'—':>9}"
     )
 
-    print(f"\n  Note : la baisse de % num_voie est normale. T12 met à NULL les")
-    print(f"  numéros aberrants (0, 00, >9999). C'est un gain de qualité,")
-    print(f"  pas une régression : moins de données fausses dans la base.")
+    print("\n  Note : la baisse de % num_voie est normale. T12 met à NULL les")
+    print("  numéros aberrants (0, 00, >9999). C'est un gain de qualité,")
+    print("  pas une régression : moins de données fausses dans la base.")
 
 
 def analyse_et_recommandations(df: pd.DataFrame):
@@ -320,4 +338,7 @@ def main():
 
 
 if __name__ == "__main__":
+    _args = parse_args()
+    DUCKDB_PATH = Path(_args.db)
+    TABLE = _args.table
     main()

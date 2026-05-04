@@ -15,12 +15,30 @@ Usage :
 import unicodedata
 from pathlib import Path
 
+import argparse
 import duckdb
 import pandas as pd
 from rapidfuzz.distance import JaroWinkler
 
-DUCKDB_PATH = Path("output/adrea_etl.duckdb")
+DUCKDB_PATH_DEFAUT = Path("output/adrea_etl.duckdb")
 TABLE = "referentiel_adresses"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--db",
+        default=str(DUCKDB_PATH_DEFAUT),
+        help="Chemin vers la base DuckDB (défaut : output/adrea_etl.duckdb)",
+    )
+    parser.add_argument(
+        "--table",
+        default=TABLE,
+        help="Nom de la table cible (défaut : referentiel_adresses)",
+    )
+    return parser.parse_args()
+
+
 SEUIL_JARO = 0.92
 
 
@@ -284,4 +302,7 @@ def main():
 
 
 if __name__ == "__main__":
+    _args = parse_args()
+    DUCKDB_PATH = Path(_args.db)
+    TABLE = _args.table
     main()
